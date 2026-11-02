@@ -48,14 +48,14 @@ bedrock-codex-interval --help > "$OUTPUT"
 begin_case create
 export TEST_TIMER_STATE=not-found
 bedrock-codex-interval 3000 > "$OUTPUT"
-rg -q '^ExecStart=".*bin with spaces/bedrock-codex" --auth$' "$UNIT_DIR/codex-bedrock-refresh.service"
-rg -q '^Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"$' "$UNIT_DIR/codex-bedrock-refresh.service"
-rg -q '^WantedBy=timers.target$' "$UNIT_DIR/codex-bedrock-refresh.timer"
-rg -q '^OnActiveSec=$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
-rg -q '^OnActiveSec=3000s$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
-rg -q '^OnUnitActiveSec=3000s$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
-rg -q '^--user enable codex-bedrock-refresh.timer$' "$TEST_SYSTEMCTL_LOG"
-rg -q '^--user restart codex-bedrock-refresh.timer$' "$TEST_SYSTEMCTL_LOG"
+grep -Eq '^ExecStart=".*bin with spaces/bedrock-codex" --auth$' "$UNIT_DIR/codex-bedrock-refresh.service"
+grep -Eq '^Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"$' "$UNIT_DIR/codex-bedrock-refresh.service"
+grep -Eq '^WantedBy=timers.target$' "$UNIT_DIR/codex-bedrock-refresh.timer"
+grep -Eq '^OnActiveSec=$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
+grep -Eq '^OnActiveSec=3000s$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
+grep -Eq '^OnUnitActiveSec=3000s$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
+grep -Eq '^--user enable codex-bedrock-refresh.timer$' "$TEST_SYSTEMCTL_LOG"
+grep -Eq '^--user restart codex-bedrock-refresh.timer$' "$TEST_SYSTEMCTL_LOG"
 if command -v systemd-analyze >/dev/null 2>&1; then
     SYSTEMD_UNIT_PATH="$UNIT_DIR:" systemd-analyze --user verify \
         "$UNIT_DIR/codex-bedrock-refresh.service" "$UNIT_DIR/codex-bedrock-refresh.timer"
@@ -68,21 +68,21 @@ cp "$UNIT_DIR/codex-bedrock-refresh.timer" "$TEST_DIR/original.timer"
 bedrock-codex-interval 30 > "$OUTPUT"
 cmp "$TEST_DIR/original.service" "$UNIT_DIR/codex-bedrock-refresh.service"
 cmp "$TEST_DIR/original.timer" "$UNIT_DIR/codex-bedrock-refresh.timer"
-rg -q '^OnActiveSec=30s$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
+grep -Eq '^OnActiveSec=30s$' "$UNIT_DIR/codex-bedrock-refresh.timer.d/interval.conf"
 
 begin_case existing-service
 export TEST_TIMER_STATE=not-found TEST_SERVICE_STATE=loaded
 mkdir -p "$UNIT_DIR"
 printf '%s\n' 'existing service must be preserved' > "$UNIT_DIR/codex-bedrock-refresh.service"
 bedrock-codex-interval 3000 > "$OUTPUT"
-rg -q '^existing service must be preserved$' "$UNIT_DIR/codex-bedrock-refresh.service"
+grep -Eq '^existing service must be preserved$' "$UNIT_DIR/codex-bedrock-refresh.service"
 
 begin_case named-timer
 bedrock-codex-interval 30 curatems-bedrock-auth-50m.timer > "$OUTPUT"
 [[ ! -e "$UNIT_DIR/codex-bedrock-refresh.service" && ! -e "$UNIT_DIR/codex-bedrock-refresh.timer" ]]
-rg -q '^OnUnitActiveSec=30s$' "$UNIT_DIR/curatems-bedrock-auth-50m.timer.d/interval.conf"
-rg -q '^--user restart curatems-bedrock-auth-50m.timer$' "$TEST_SYSTEMCTL_LOG"
-if rg -q ' enable | show .*\.service' "$TEST_SYSTEMCTL_LOG"; then
+grep -Eq '^OnUnitActiveSec=30s$' "$UNIT_DIR/curatems-bedrock-auth-50m.timer.d/interval.conf"
+grep -Eq '^--user restart curatems-bedrock-auth-50m.timer$' "$TEST_SYSTEMCTL_LOG"
+if grep -Eq ' enable | show .*\.service' "$TEST_SYSTEMCTL_LOG"; then
     echo 'Existing timers must not be enabled or have their services replaced.' >&2
     exit 1
 fi
@@ -101,7 +101,7 @@ done
 begin_case no-user-manager
 export TEST_FAIL_ACTION=list-timers
 expect_failure 3000
-rg -q 'cannot connect to your systemd user manager' "$OUTPUT"
+grep -Eq 'cannot connect to your systemd user manager' "$OUTPUT"
 [[ ! -e "$UNIT_DIR" ]]
 
 begin_case broken-timer
@@ -112,7 +112,7 @@ expect_failure 3000
 begin_case reload-failure
 export TEST_FAIL_ACTION=daemon-reload
 expect_failure 30 existing.timer
-if rg -q ' restart | enable ' "$TEST_SYSTEMCTL_LOG"; then
+if grep -Eq ' restart | enable ' "$TEST_SYSTEMCTL_LOG"; then
     echo 'Must not restart after a failed reload.' >&2
     exit 1
 fi
@@ -120,13 +120,13 @@ fi
 begin_case macos
 export TEST_PLATFORM=Darwin
 expect_failure 30
-rg -q 'use bedrock-codex-interval-macos.sh on macOS' "$OUTPUT"
+grep -Eq 'use bedrock-codex-interval-macos.sh on macOS' "$OUTPUT"
 [[ ! -e "$TEST_SYSTEMCTL_LOG" && ! -e "$UNIT_DIR" ]]
 
 begin_case unsupported-platform
 export TEST_PLATFORM=FreeBSD
 expect_failure 30
-rg -q 'this script requires Linux with systemd' "$OUTPUT"
+grep -Eq 'this script requires Linux with systemd' "$OUTPUT"
 [[ ! -e "$TEST_SYSTEMCTL_LOG" && ! -e "$UNIT_DIR" ]]
 
 printf '%s\n' 'All interval script tests passed.'

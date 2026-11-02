@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Fake external commands for tests/test-bedrock-launchers.sh. Symlink this file under
+# each command name; it dispatches on ${0##*/}, appends the argv to $TEST_LOG and
+# never touches the real system. Behaviour is steered by TEST_* environment variables.
+set -euo pipefail
+
+name="${0##*/}"
+dir="${0%/*}"
+
+# Log "name [arg] [arg]..." so argument boundaries are unambiguous.
+log_call() {
+    {
+        printf '%s' "$name"
+        if (( $# > 0 )); then printf ' [%s]' "$@"; fi
+        printf '\n'
+    } >> "$TEST_LOG"
+}
+
+# "set" or "unset", for logging whether a variable reached the child.
+state() { if [[ -n "${!1+x}" ]]; then printf 'set'; else printf 'unset'; fi; }
+
+# Run the real command of the same name, skipping this fixture directory on PATH.
+run_real() {
+    PATH="${PATH#"$dir":}"
+    exec "$name" "$@"
+}
+
+# Simulate a refresh: macaw-auth / bedrock-codex write fresh credentials.
+write_fresh_creds() {
+    if [[ -n "${TEST_FRESH_CREDS:-}" ]]; then
+        cp "$TEST_FRESH_CREDS" "$AWS_SHARED_CREDENTIALS_FILE"
+    fi
+}
+
+# uname is only platform detection noise; every other call is logged.
+[[ "$name" == uname ]] || log_call "$@"
+
+case "$name" in
+    uname)
+        printf '%s\n' "${TEST_PLATFORM:-Linux}"
+        ;;
+    date)
+        # The macOS path must never use GNU `date --date`.
+        if [[ "${TEST_FORBID_DASHDATE:-}" == 1 ]]; then
+            for arg in "$@"; do
+                if [[ "$arg" == --date* || "$arg" == -d ]]; then
+                    echo 'Test failed: the mac path must not use date --date.' >&2
+                    exit 99
+                fi
+            done
+        fi
+        run_real "$@"
+        ;;
+    flock)
+        # The macOS path must never use flock.
+        if [[ "${TEST_FORBID_FLOCK:-}" == 1 ]]; then
+            echo 'Test failed: the mac path must not use flock.' >&2
+            exit 99
+        fi
+        run_real "$@"
+        ;;
+    macaw-auth)
+        [[ "${TEST_MACAW_FAIL:-}" != 1 ]] || exit 1
+        write_fresh_creds
+        ;;
+    aws)
+        printf 'aws.env AWS_PROFILE=%s AWS_REGION=%s\n' "${AWS_PROFILE:-}" "${AWS_REGION:-}" >> "$TEST_LOG"
+        ;;
+    systemctl)
+        case "${1:-}" in
+            --user) ;;
+            *) echo 'Test failed: systemctl must use --user.' >&2; exit 99 ;;
+        esac
+        shift
+        case "${1:-}" in
+            show-environment) [[ "${TEST_NO_USER_MANAGER:-}" != 1 ]] || exit 1 ;;
+            is-enabled)
+                printf '%s\n' "${TEST_TIMER_ENABLED:-disabled}"
+                [[ "${TEST_TIMER_ENABLED:-disabled}" == enabled ]] || exit 1
+                ;;
+            daemon-reload|enable) ;;
+            *) exit 99 ;;
+        esac
+        ;;
+    launchctl)
+        case "${1:-}" in
+            print) [[ "${TEST_LAUNCHD_LOADED:-}" == 1 ]] || exit 113 ;;
+            bootstrap) ;;
+            *) exit 99 ;;
+        esac
+        ;;
+    osascript|open|pkill)
+        ;;
+    pgrep)
+        # No leftover Codex app-server process.
+        exit 1
+        ;;
+    codex|claude)
+        printf '%s.env AWS_PROFILE=%s AWS_REGION=%s AWS_DEFAULT_REGION=%s CLAUDE_CODE_USE_BEDROCK=%s bearer=%s openai=%s akid=%s secret=%s token=%s\n' \
+            "$name" "${AWS_PROFILE:-}" "${AWS_REGION:-}" "${AWS_DEFAULT_REGION:-}" \
+            "${CLAUDE_CODE_USE_BEDROCK:-}" "$(state AWS_BEARER_TOKEN_BEDROCK)" "$(state OPENAI_API_KEY)" \
+            "$(state AWS_ACCESS_KEY_ID)" "$(state AWS_SECRET_ACCESS_KEY)" "$(state AWS_SESSION_TOKEN)" >> "$TEST_LOG"
+        ;;
+    bedrock-codex)
+        # Stand-in for the launcher when codex-bedrock-creds calls it.
+        printf 'bedrock-codex.env FROM_CREDS=%s THRESHOLD=%s bearer=%s path=%s\n' \
+            "${CODEX_BEDROCK_FROM_CREDS:-}" "${CODEX_BEDROCK_REFRESH_THRESHOLD:-}" \
+            "$(state AWS_BEARER_TOKEN_BEDROCK)" "$PATH" >> "$TEST_LOG"
+        echo 'Authentication complete.'
+        echo 'noise on stderr' >&2
+        [[ "${TEST_BEDROCK_FAIL:-}" != 1 ]] || exit 1
+        write_fresh_creds
+        ;;
+    *)
+        echo "Test failed: unexpected command $name." >&2
+        exit 99
+        ;;
+esac
