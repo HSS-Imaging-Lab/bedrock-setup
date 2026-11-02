@@ -7,16 +7,16 @@ installed for you.
 
 ## How the pieces connect
 
-```text
-bedrock-claude / bedrock-codex  --(refresh if needed)-->  macaw-auth  -->  ~/.aws/credentials
-        |                                                                   [claude_prod] [codex_prod]
-        +-- installs a timer: systemd user timer (Linux) / LaunchAgent (macOS)
-            every 50 minutes it runs   <launcher> --auth --force
+![How bedrock-setup keeps Bedrock credentials fresh](docs/diagrams/credential-flow.png)
 
-Claude Code  settings.json "awsAuthRefresh"  -->  bedrock-claude --auth
-Codex        profile codex_bedrock           -->  credential_process: codex-bedrock-creds
-                                                  -->  bedrock-codex --auth
-```
+- **The refresh timer** runs `<launcher> --<platform> --auth --force` every 50 minutes, so it
+  refreshes even when the keys are still valid.
+- **Claude Code's** `awsAuthRefresh` setting runs `bedrock-claude --auth`.
+- **Codex's** `codex_bedrock` profile has `codex-bedrock-creds` as its `credential_process`; when
+  the `codex_prod` keys are near expiry it runs `bedrock-codex --auth`.
+
+The diagram source is [`docs/diagrams/credential-flow.mmd`](docs/diagrams/credential-flow.mmd),
+with its pictures in `docs/diagrams/icons/`.
 
 | File | What it does |
 | --- | --- |
