@@ -2,8 +2,14 @@
 """Self-refreshing AWS credential_process for the `codex_bedrock` profile.
 
 Reads the short-lived keys that macaw-auth writes into ~/.aws/credentials
-[codex_prod]. When they are close to expiry it re-runs macaw-auth login
-(non-interactive, password from the keyring) and returns the fresh keys.
+[codex_prod] (or CODEX_BEDROCK_PROFILE). When they are close to expiry it runs `bedrock-codex --auth`
+(~/.local/bin/bedrock-codex, else the one on PATH), which does the macaw-auth
+login (non-interactive, password from the keyring), verifies the keys and
+rewrites ~/.codex/.env, then returns the fresh keys. bedrock-codex picks the
+platform itself. The refresh threshold goes to it in seconds through
+CODEX_BEDROCK_REFRESH_THRESHOLD, and CODEX_BEDROCK_FROM_CREDS=1 stops it from
+installing a refresh timer. stdout here stays pure JSON: bedrock-codex's output
+is captured into the log, never passed through.
 
 Modes:
   codex-bedrock-creds             credential_process: print JSON for the SDK
@@ -16,15 +22,18 @@ import configparser
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOME = Path.home()
-CRED_FILE = HOME / ".aws" / "credentials"
-SOURCE_PROFILE = "codex_prod"
-MACAW = HOME / ".local" / "bin" / "macaw-auth"
+# Same file bedrock-codex reads, so both agree when the SDK overrides it.
+CRED_FILE = Path(os.environ.get("AWS_SHARED_CREDENTIALS_FILE") or HOME / ".aws" / "credentials")
+# Source profile macaw-auth writes; the same override bedrock-codex honours.
+SOURCE_PROFILE = os.environ.get("CODEX_BEDROCK_PROFILE", "codex_prod")
+BEDROCK_CODEX = HOME / ".local" / "bin" / "bedrock-codex"
 LOG = HOME / ".codex" / "logs" / "bedrock-refresh.log"
 LOCK = HOME / ".codex" / "logs" / "bedrock-refresh.lock"
 # credential_process mode: refresh when this little remains
@@ -66,6 +75,12 @@ def remaining(creds: dict[str, str] | None) -> timedelta:
     return expiry_of(creds) - datetime.now(timezone.utc)
 
 
+def find_bedrock_codex(path: str) -> str | None:
+    if BEDROCK_CODEX.is_file() and os.access(BEDROCK_CODEX, os.X_OK):
+        return str(BEDROCK_CODEX)
+    return shutil.which("bedrock-codex", path=path)
+
+
 def refresh(threshold: timedelta, reason: str) -> dict[str, str] | None:
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     with LOCK.open("w") as lock:
@@ -75,16 +90,22 @@ def refresh(threshold: timedelta, reason: str) -> dict[str, str] | None:
         if creds is not None and left > threshold:
             log(f"{reason}: another process already refreshed; {left} remaining")
             return creds
-        log(f"{reason}: refreshing via macaw-auth ({left} remaining)")
+        log(f"{reason}: refreshing via bedrock-codex --auth ({left} remaining)")
         env = dict(os.environ)
         env["PATH"] = (
             f"{HOME / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"
             + env.get("PATH", "")
         )
         env.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+        env["CODEX_BEDROCK_FROM_CREDS"] = "1"
+        env["CODEX_BEDROCK_REFRESH_THRESHOLD"] = str(int(threshold.total_seconds()))
+        launcher = find_bedrock_codex(env["PATH"])
+        if launcher is None:
+            log("bedrock-codex not found in ~/.local/bin or on PATH")
+            return read_creds()
         try:
             proc = subprocess.run(
-                [str(MACAW), "login", SOURCE_PROFILE, "--target-profile", SOURCE_PROFILE],
+                [launcher, "--auth"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -92,10 +113,10 @@ def refresh(threshold: timedelta, reason: str) -> dict[str, str] | None:
                 env=env,
             )
         except subprocess.TimeoutExpired:
-            log("macaw-auth login timed out after 180s")
+            log("bedrock-codex --auth timed out after 180s")
             return read_creds()
         tail = (proc.stdout + proc.stderr).strip().splitlines()[-3:]
-        log(f"macaw-auth exit={proc.returncode}: " + " | ".join(line.strip() for line in tail))
+        log(f"bedrock-codex --auth exit={proc.returncode}: " + " | ".join(line.strip() for line in tail))
         creds = read_creds()
         log(f"now {remaining(creds)} remaining")
         return creds
@@ -120,7 +141,7 @@ def main(argv: list[str]) -> int:
     if creds is None or remaining(creds) <= timedelta(0):
         print(
             "codex-bedrock-creds: no valid codex_prod credentials and refresh failed; "
-            "run `macaw-auth login codex_prod --target-profile codex_prod`",
+            "run `bedrock-codex --auth`",
             file=sys.stderr,
         )
         return 1

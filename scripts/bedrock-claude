@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# Launch Claude Code on Amazon Bedrock and keep the claude_prod credentials fresh.
+# One self-contained script for macOS and Linux.
+#
+#   bedrock-claude [--mac|--linux] [claude args...]   refresh if needed, install the timer, launch Claude
+#   bedrock-claude [--mac|--linux] --auth [--force]   refresh only (the timer and awsAuthRefresh call this)
+#   bedrock-claude [--mac|--linux] --install-timer    install and start the 50-minute refresh timer
+#   bedrock-claude -h|--help                          show this help
+#
+# --mac or --linux must come first and picks the platform; with neither, the platform
+# is detected from `uname -s`. Passing both is an error.
+#
+# A timer re-runs `--auth --force` every 50 minutes, so the ~1-hour STS token in
+# ~/.aws/credentials never lapses, overnight included:
+#   Linux  a systemd user timer (claude-bedrock-refresh.timer; linger keeps it running)
+#   macOS  a per-user LaunchAgent (com.hss.claude-bedrock-refresh)
+# ~/.claude/settings.json applies to every Claude Code session: its env sets
+# CLAUDE_CODE_SKIP_AWS_CRED_CACHE=1 (re-read credentials on every request) and its
+# awsAuthRefresh runs `bedrock-claude --auth` if credentials are still found expired.
+#
+# Written for bash 3.2 (the macOS system bash): no bash 4+ features, no GNU-only tools
+# on the mac path.
+set -euo pipefail
+
+PROFILE="${CLAUDE_BEDROCK_PROFILE:-claude_prod}"
+CREDENTIALS_FILE="${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}"
+THRESHOLD="${CLAUDE_BEDROCK_REFRESH_THRESHOLD:-300}"
+INTERVAL_SECS=3000
+LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/bedrock-claude-refresh-${UID}.lock"
+TIMER="claude-bedrock-refresh.timer"
+SERVICE="claude-bedrock-refresh.service"
+# macOS only: mkdir lock directory (no flock there) and the LaunchAgent.
+LOCK_DIR="${TMPDIR:-/tmp}"
+LOCK_DIR="${LOCK_DIR%/}/bedrock-claude-refresh-${UID}.lock.d"
+LOCK_STALE_MINS=5
+LABEL="com.hss.claude-bedrock-refresh"
+PLATFORM=""
+
+# ── Platform ──────────────────────────────────────────────────
+usage() {
+  cat <<'EOF'
+Usage: bedrock-claude [--mac|--linux] [claude args...]
+       bedrock-claude [--mac|--linux] --auth [--force]
+       bedrock-claude [--mac|--linux] --install-timer
+       bedrock-claude -h|--help
+
+  --mac, --linux   pick the platform (first argument); default: detect from uname -s
+  --auth           refresh claude_prod credentials if needed; --force refreshes regardless
+  --install-timer  install and start the 50-minute refresh timer
+                   (systemd user timer on Linux, LaunchAgent on macOS)
+  -h, --help       this help; run `claude --help` for Claude Code's own options
+
+Anything else is passed to claude, with CLAUDE_CODE_USE_BEDROCK=1 and
+AWS_PROFILE=claude_prod set.
+EOF
+}
+
+# Resolve this script's own absolute path. readlink -f is missing on older macOS,
+# so fall back to following symlinks by hand.
+resolve_self() {
+  local src="${BASH_SOURCE[0]}" dir
+  if readlink -f "$src" 2>/dev/null; then return 0; fi
+  while [[ -L "$src" ]]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" == /* ]] || src="$dir/$src"
+  done
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  printf '%s/%s\n' "$dir" "$(basename "$src")"
+}
+
+detect_platform() {
+  [[ -z "$PLATFORM" ]] || return 0
+  case "$(uname -s)" in
+    Darwin) PLATFORM=mac ;;
+    Linux)  PLATFORM=linux ;;
+    *)      echo "Error: unsupported platform '$(uname -s)'; pass --mac or --linux." >&2
+            exit 1 ;;
+  esac
+}
+
+# Stop with a clear message when a required command is missing.
+need() {
+  command -v "$1" >/dev/null 2>&1 || { echo "Error: '$1' not found on PATH. $2" >&2; exit 1; }
+}
+
+# ── Credentials ───────────────────────────────────────────────
+# Seconds until the expiration macaw-auth wrote for $PROFILE (negative when past).
+# Linux uses GNU date; macOS date has no --date, so python3 parses the timestamp.
+seconds_remaining() {
+  local exp exp_epoch
+  exp="$(awk -v t="$PROFILE" '
+    $0 == "[" t "]" { in_p = 1; next }
+    /^\[/ { in_p = 0 }
+    in_p && /^[[:space:]]*expiration[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+  ' "$CREDENTIALS_FILE" 2>/dev/null)"
+  [[ -n "$exp" ]] || return 1
+  if [[ "$PLATFORM" == mac ]]; then
+    python3 -I -c '
+import sys
+from datetime import datetime, timezone
+s = sys.argv[1].strip()
+if s[-1:] in ("Z", "z"):
+    s = s[:-1] + "+00:00"
+d = datetime.fromisoformat(s)
+if d.tzinfo is None:
+    d = d.replace(tzinfo=timezone.utc)
+print(int((d - datetime.now(timezone.utc)).total_seconds()))
+' "$exp" 2>/dev/null
+  else
+    exp_epoch="$(date --date="$exp" +%s 2>/dev/null)" || return 1
+    echo $(( exp_epoch - $(date +%s) ))
+  fi
+}
+
+# ── Lock ──────────────────────────────────────────────────────
+# Linux: flock on fd 9. macOS has no flock, so an atomic mkdir is the lock: waiters
+# poll, a holder cleans up on exit, and a lock directory older than LOCK_STALE_MINS
+# (holder was SIGKILLed or lost power) is broken.
+lock_acquire() {
+  if [[ "$PLATFORM" != mac ]]; then
+    exec 9>"$LOCK_FILE"
+    flock 9
+    return 0
+  fi
+  mkdir -p "$(dirname "$LOCK_DIR")"
+  until mkdir "$LOCK_DIR" 2>/dev/null; do
+    if [[ ! -d "$LOCK_DIR" ]]; then
+      echo "Cannot create lock directory $LOCK_DIR." >&2
+      exit 1
+    fi
+    if [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin "+$LOCK_STALE_MINS" 2>/dev/null)" ]]; then
+      echo "Breaking stale lock $LOCK_DIR." >&2
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
+    sleep 0.2
+  done
+  trap lock_release EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+lock_release() {
+  if [[ "$PLATFORM" == mac ]]; then
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+  else
+    flock -u 9
+  fi
+}
+
+# $1 = "force" skips the expiry check. The lock serialises the timer, awsAuthRefresh
+# and the launcher; a waiter re-checks expiry once the lock frees.
+refresh() {
+  local rem
+  [[ "$PLATFORM" != mac ]] || need python3 "macOS needs it to read the credential expiry (brew install python3, or xcode-select --install)."
+  lock_acquire
+  if [[ "${1:-}" != force ]] && rem="$(seconds_remaining)" && (( rem > THRESHOLD )); then
+    echo "Profile $PROFILE valid for ${rem}s; refresh skipped." >&2
+  else
+    need macaw-auth "Install it first; it logs in and writes the keys to $CREDENTIALS_FILE."
+    echo "Refreshing $PROFILE with macaw-auth..." >&2
+    macaw-auth login "$PROFILE" --target-profile "$PROFILE" </dev/null
+  fi
+  lock_release
+}
+
+# ── Refresh timer ─────────────────────────────────────────────
+install_timer_linux() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    echo "No systemd user manager; refresh timer not installed." >&2
+    return 0
+  fi
+  if [[ "$(systemctl --user is-enabled "$TIMER" 2>/dev/null || true)" == enabled ]]; then
+    return 0
+  fi
+  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" exe="$SELF"
+  # Quote the executable for systemd: escape backslashes, quotes, % and $.
+  exe="${exe//\\/\\\\}"; exe="${exe//\"/\\\"}"; exe="${exe//%/%%}"; exe="${exe//\$/\$\$}"
+  mkdir -p "$dir"
+  printf '%s\n' '[Unit]' 'Description=Refresh Claude Code Bedrock credentials' \
+    '' '[Service]' 'Type=oneshot' \
+    'Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"' \
+    "ExecStart=\"$exe\" --linux --auth --force" > "$dir/$SERVICE"
+  printf '%s\n' '[Unit]' 'Description=Refresh Claude Code Bedrock credentials every 50 minutes' \
+    '' '[Timer]' "Unit=$SERVICE" 'OnActiveSec=' "OnActiveSec=${INTERVAL_SECS}s" \
+    "OnUnitActiveSec=${INTERVAL_SECS}s" 'AccuracySec=1s' 'RandomizedDelaySec=0' \
+    '' '[Install]' 'WantedBy=timers.target' > "$dir/$TIMER"
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$TIMER"
+  echo "Installed and started $TIMER (every ${INTERVAL_SECS}s)." >&2
+}
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# A loaded agent is left alone (like the Linux "already enabled" check); otherwise
+# write the plist and bootstrap it into the user's GUI domain.
+install_timer_mac() {
+  if ! command -v launchctl >/dev/null 2>&1; then
+    echo "launchctl not found; refresh timer not installed." >&2
+    return 0
+  fi
+  local domain="gui/$(id -u)"
+  if launchctl print "$domain/$LABEL" >/dev/null 2>&1; then
+    return 0
+  fi
+  local plist="$HOME/Library/LaunchAgents/$LABEL.plist" logs="$HOME/.claude/logs" tmp
+  local exe path_env out err
+  exe="$(xml_escape "$SELF")"
+  path_env="$(xml_escape "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")"
+  out="$(xml_escape "$logs/bedrock-refresh-launchd.out.log")"
+  err="$(xml_escape "$logs/bedrock-refresh-launchd.err.log")"
+  mkdir -p "$HOME/Library/LaunchAgents" "$logs"
+  tmp="$(mktemp "$plist.XXXXXX")"
+  cat > "$tmp" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$exe</string>
+        <string>--mac</string>
+        <string>--auth</string>
+        <string>--force</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>$INTERVAL_SECS</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$path_env</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>$out</string>
+    <key>StandardErrorPath</key>
+    <string>$err</string>
+</dict>
+</plist>
+EOF
+  mv -f "$tmp" "$plist"
+  launchctl bootstrap "$domain" "$plist"
+  echo "Installed and started $LABEL (every ${INTERVAL_SECS}s)." >&2
+}
+
+install_timer() {
+  if [[ "$PLATFORM" == mac ]]; then install_timer_mac; else install_timer_linux; fi
+}
+
+# ── Main ──────────────────────────────────────────────────────
+SELF="$(resolve_self)"
+# Consume leading --mac/--linux; giving both is an error.
+while [[ "${1:-}" == --mac || "${1:-}" == --linux ]]; do
+  if [[ -n "$PLATFORM" && "$PLATFORM" != "${1#--}" ]]; then
+    echo "Error: pass only one of --mac or --linux." >&2
+    exit 1
+  fi
+  PLATFORM="${1#--}"
+  shift
+done
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+detect_platform
+
+case "${1:-}" in
+  --auth|-auth)
+    if [[ "${2:-}" == "--force" ]]; then refresh force; else refresh ""; fi
+    echo "Authentication complete."
+    exit 0
+    ;;
+  --install-timer)
+    install_timer
+    exit 0
+    ;;
+esac
+
+need claude "Install Claude Code first."
+refresh ""
+install_timer
+export CLAUDE_CODE_USE_BEDROCK=1
+export AWS_PROFILE="$PROFILE"
+exec claude "$@"
