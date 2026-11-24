@@ -36,7 +36,6 @@ test harness only (T1). Each line below is kept on purpose.
 - `AGENTS.md`: not added in this task (harness only); follow-up
 - `CLAUDE.md`: not added in this task (harness only); follow-up
 - `CODEOWNERS`: not added in this task (harness only); follow-up
-- `CHANGELOG.md`: not added in this task (harness only); follow-up
 - `GLOSSARY.md`: not added in this task (harness only); follow-up
 - `.repos/`: no reference repos (see make:repos)
 - `.gitmodules`: no submodules

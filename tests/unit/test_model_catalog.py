@@ -60,3 +60,11 @@ def test_launcher_model_ids_are_in_the_catalog(
     ids = set(MODEL_ID.findall(launcher_path.read_text(encoding="utf-8")))
     assert ids
     assert ids <= {m["slug"] for m in models}
+
+
+def test_gpt_6_2_models_sort_first(models: list[dict[str, object]]) -> None:
+    by_priority = sorted(models, key=lambda m: int(str(m["priority"])))
+    assert [m["slug"] for m in by_priority[:2]] == [
+        "global.openai.gpt-6.2-astra",
+        "global.openai.gpt-6.2-sol",
+    ]

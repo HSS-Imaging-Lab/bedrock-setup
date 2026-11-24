@@ -1,0 +1,35 @@
+# Example ~/.aws/config for a role that sits under an IAM path, such as the HSS managed role
+# managed/hss-mri-research-dev. Replace every <...> value with your own.
+
+# macaw-auth settings: copy these from your existing macaw-auth setup.
+[macaw-auth]
+session_duration = 3600
+identity_url = <your identity provider sign-in URL>
+username = <your username>
+idp_name = <your IdP name>
+enable_keyring = True
+region = us-east-1
+partition = aws
+
+# Source profiles: macaw-auth writes short-lived keys into ~/.aws/credentials under these names.
+# macaw-auth builds the role ARN as arn:aws:iam::<account>:role<path><role_name>, so
+# path = /managed/ gives role/managed/hss-mri-research-dev.
+# A role with no IAM path leaves the `path` line out.
+[profile claude_prod]
+role_name = hss-mri-research-dev
+path = /managed/
+account_number = <aws-account-id>
+
+# Codex needs bedrock:InvokeModel on arn:aws:bedrock:<region>:<account>:project/* as well as
+# the foundation-model and inference-profile resources: the Responses endpoint checks the
+# Bedrock project. A role that runs Claude Code but gets a 401 from Codex is missing that resource.
+[profile codex_prod]
+role_name = hss-mri-research-dev
+path = /managed/
+account_number = <aws-account-id>
+
+# The profile Codex uses. Its keys come from codex_prod and refresh themselves.
+# credential_process needs an absolute path: AWS does not expand ~ or $HOME there.
+[profile codex_bedrock]
+credential_process = <absolute path to home>/.local/bin/codex-bedrock-creds
+region = us-east-1
