@@ -1,0 +1,99 @@
+[project]
+name = "bedrock-setup"
+version = "0.1.0"
+description = "Launchers that run Claude Code and Codex on Amazon Bedrock."
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+test = [
+  "pytest",
+  "pytest-socket",
+  "pytest-randomly",
+  "pytest-timeout",
+]
+lint = [
+  "ruff",
+  "mypy",
+  "pip-audit",
+  "prek",
+]
+dev = [{ include-group = "test" }, { include-group = "lint" }]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["tests", "scripts"]
+extend-exclude = ["tests/fixtures"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W", "F",  # pycodestyle, pyflakes
+  "I",            # import sorting
+  "D",            # docstrings
+  "UP",           # pyupgrade
+  "B",            # bugbear
+  "SIM",          # simplifications
+  "C4",           # comprehensions
+  "RET",          # return statements
+  "S",            # security (bandit)
+  "A",            # shadowed builtins
+  "PT",           # pytest style
+  "PTH",          # pathlib over os.path
+  "DTZ",          # timezone-aware datetimes
+  "TC",           # type-checking-only imports
+  "ASYNC",        # async pitfalls
+  "RUF",          # Ruff-specific rules
+  "PGH",          # no blanket type: ignore or noqa
+  "BLE",          # no blind except Exception
+  "ANN401",       # no Any in a signature
+  "TID251",       # banned imports (below)
+  "T20",          # no print
+]
+ignore = ["E501"]  # the formatter owns line length
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"unittest.mock".msg = "Inject a fake through a port (tests/fakes/); never mock."
+"pytest_mock".msg = "Inject a fake through a port (tests/fakes/); never mock."
+"pytest.mark.flaky".msg = "A rerun hides the race; wait for the signal the code emits."
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "S101", "S603", "S607"]  # tests run fixed bash, aws, and codex commands
+"scripts/**" = ["T20", "D100", "S603", "S607"]  # print, no module docstring, calling git
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+warn_unused_ignores = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-cast", "truthy-bool"]
+files = [
+  "tests",
+  "scripts/check_ratchet.py",
+  "scripts/check_imports.py",
+  "scripts/check_patient_data.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-config", "--strict-markers", "-m", "not live"]
+xfail_strict = true
+timeout = 60
+markers = [
+  "slow: long-running; deselect with -m 'not slow'",
+  "live: calls real AWS Bedrock; run with make test-live",
+]
+
+[[tool.mypy.overrides]]
+module = ["pydicom", "pydicom.*"]  # optional import inside check_patient_data.py, not installed here
+ignore_missing_imports = true
+
+[tool.ruff.format]
+# Verbatim copies of clean-up-repo assets; the formatter would rewrite them.
+exclude = ["scripts/check_ratchet.py", "scripts/check_imports.py", "scripts/check_patient_data.py"]
