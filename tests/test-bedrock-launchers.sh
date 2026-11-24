@@ -522,7 +522,7 @@ write_creds "$AWS_SHARED_CREDENTIALS_FILE" 7200 7200
 write_config
 ok bedrock-codex --mac --app sol
 cfg="$HOME/.codex/config.toml"
-file_line "$cfg" 'model = "global.openai.gpt-6-sol"'
+file_line "$cfg" 'model = "global.openai.gpt-6.2-sol"'
 file_line "$cfg" 'model_provider = "amazon-bedrock-runtime"'
 file_line "$cfg" '[model_providers.amazon-bedrock-runtime.aws]'
 file_line "$cfg" 'model_reasoning_effort = "high"'
@@ -545,7 +545,7 @@ write_creds "$AWS_SHARED_CREDENTIALS_FILE" 7200 7200
 write_config
 ok bedrock-codex --linux --app sol
 cfg="$HOME/.codex/config.toml"
-file_line "$cfg" 'model = "global.openai.gpt-6-sol"'
+file_line "$cfg" 'model = "global.openai.gpt-6.2-sol"'
 file_line "$cfg" 'model_provider = "amazon-bedrock"'
 file_line "$cfg" '[model_providers.amazon-bedrock.aws]'
 file_line "$cfg" 'model_reasoning_effort = "high"'
@@ -568,7 +568,7 @@ begin_case linux-codex-launch
 write_creds "$AWS_SHARED_CREDENTIALS_FILE" 7200 7200
 export AWS_BEARER_TOKEN_BEDROCK=stale
 ok bedrock-codex --linux sol
-log_exact 'codex [--model] [global.openai.gpt-6-sol]'
+log_exact 'codex [--model] [global.openai.gpt-6.2-sol]'
 log_exact 'codex.env AWS_PROFILE=codex_bedrock AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 CLAUDE_CODE_USE_BEDROCK= bearer=unset openai=unset akid=unset secret=unset token=unset'
 out_has 'Launching Codex'
 
@@ -585,7 +585,7 @@ begin_case autodetect-codex-launch
 write_creds "$AWS_SHARED_CREDENTIALS_FILE" 7200 7200
 export TEST_LAUNCHD_LOADED=1
 TEST_PLATFORM=Linux ok bedrock-codex astra
-log_exact 'codex [--model] [global.openai.gpt-6-astra]'
+log_exact 'codex [--model] [global.openai.gpt-6.2-astra]'
 rm -f "$TEST_LOG"
 TEST_PLATFORM=Darwin ok bedrock-codex astra
 log_has '^codex \[-c\] \[model_provider='
@@ -594,8 +594,8 @@ begin_case codex-menu
 write_creds "$AWS_SHARED_CREDENTIALS_FILE" 7200 7200
 printf '3\n' > "$CASE/stdin"
 RUN_STDIN="$CASE/stdin" ok bedrock-codex --linux
-log_exact 'codex [--model] [global.openai.gpt-6-sol]'
-out_has '3\) global.openai.gpt-6-sol'
+log_exact 'codex [--model] [global.openai.gpt-6.2-sol]'
+out_has '3\) global.openai.gpt-6.2-sol'
 
 begin_case codex-unknown-model
 write_creds "$AWS_SHARED_CREDENTIALS_FILE" 7200 7200

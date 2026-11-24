@@ -26,6 +26,7 @@ with its pictures in `docs/diagrams/icons/`.
 | `scripts/bedrock-codex-interval` | Linux: change the refresh interval of the systemd user timer. |
 | `scripts/bedrock-codex-interval-macos.sh` | macOS: change the refresh interval of the Codex LaunchAgent. |
 | `templates/global-gpt6-models.json` | Codex model catalog for the GPT-6 Global models. |
+| `templates/aws-config.example` | Complete example `~/.aws/config`, for a role under an IAM path. |
 
 Credentials are always checked and verified through the source profiles
 (`claude_prod`, `codex_prod`), never through `codex_bedrock`: its
@@ -107,6 +108,19 @@ credential_process = <absolute path to home>/.local/bin/codex-bedrock-creds
 region = us-east-1
 ```
 
+### Roles under an IAM path
+
+If your role ARN has a path (for example `role/managed/hss-mri-research-dev`), add
+`path = /managed/` to `claude_prod` and `codex_prod` next to `role_name`. `macaw-auth` puts it
+in the role ARN, and `bedrock-codex` needs no change. A complete file is in
+`templates/aws-config.example`.
+
+Symptom: Claude Code works but Codex gets a 401. Codex calls Bedrock's OpenAI Responses
+endpoint, which checks `bedrock:InvokeModel` on the Bedrock project
+(`arn:aws:bedrock:<region>:<account>:project/default`). A role whose policy lists only
+foundation-model and inference-profile resources fails that check. Fix: add `project/*` to the
+role's `bedrock:InvokeModel` resources.
+
 ### `~/.claude/settings.json`
 
 Merge these keys into the file; keep your other settings. `CLAUDE_CODE_SKIP_AWS_CRED_CACHE`
@@ -184,6 +198,8 @@ region = "us-east-1"
 
 The catalog (`templates/global-gpt6-models.json`) holds these model IDs:
 
+- `global.openai.gpt-6.2-astra` - `6.2 Astra (Global)`
+- `global.openai.gpt-6.2-sol` - `6.2 Sol (Global)`
 - `global.openai.gpt-6-astra` - `6 Astra (Global)`
 - `global.openai.gpt-6.1-sol` - `6.1 Sol (Global)`
 - `global.openai.gpt-6-sol` - `6 Sol (Global)`
@@ -208,7 +224,7 @@ one. Passing both is an error. `-h` / `--help` lists every mode.
 | `bedrock-claude [--mac\|--linux] [claude args...]` | Refresh if needed, install the timer, launch Claude Code. Everything after the platform flag goes to `claude`. |
 | `bedrock-claude [--mac\|--linux] --auth [--force]` | Refresh only. `--force` skips the expiry check. This is what the timer and `awsAuthRefresh` run. |
 | `bedrock-claude [--mac\|--linux] --install-timer` | Install and start the 50-minute refresh timer. |
-| `bedrock-codex [--mac\|--linux] [astra\|sol\|luna]` | Refresh if needed, install the timer, launch the Codex CLI on that model (menu if omitted). |
+| `bedrock-codex [--mac\|--linux] [astra\|sol\|luna]` | Refresh if needed, install the timer, launch the Codex CLI on that model (menu if omitted). `astra` and `sol` launch GPT-6.2 Astra and Sol; `luna` launches GPT-6 Luna. |
 | `bedrock-codex [--mac\|--linux] --auth [--force]` | Refresh, verify, write `~/.codex/.env`, install the timer. `-auth` also works. |
 | `bedrock-codex [--mac\|--linux] --app [astra\|sol\|luna]` | Set the Codex app default model. macOS: also sets `model_provider` and the provider's `.aws` table name, quits ChatGPT, and reopens it. Linux: edits only `model =` in `~/.codex/config.toml`; reload the app session afterwards. |
 | `bedrock-codex [--mac\|--linux] --install-timer` | Install and start the 50-minute refresh timer. |
@@ -373,6 +389,11 @@ Everything external (`macaw-auth`, `aws`, `systemctl`, `launchctl`, `osascript`,
 `uname`, ...) is faked through `PATH`, in a temporary directory with a fake `HOME`, so nothing
 real is refreshed, installed or launched. The macOS path is tested on any host the same way.
 The tests use only `grep -E`, `python3` and standard shell tools.
+
+## Development
+
+See `DEVELOPMENT.md`: `make setup` installs dependencies, `make check` runs lint, offline tests
+and audit, and `make test-live` runs the live Bedrock checks.
 
 ## Do not commit secrets
 

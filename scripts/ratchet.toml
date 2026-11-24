@@ -1,0 +1,10 @@
+# Counts only go down. After a cleanup, `python3 scripts/check_ratchet.py --update` lowers them.
+exclude = []
+# Files over 800 lines when recorded. The list only shrinks: split a file to drop it.
+long_files = []
+
+[counts]
+mocks = 0
+casts = 0
+ignores = 0
+any = 0

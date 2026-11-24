@@ -1,0 +1,3 @@
+# Settings for scripts/check_patient_data.py. This repo holds no imaging data.
+allow = ["testdata/**", "tests/data/**", "tests/fixtures/**", "**/__fixtures__/**"]
+allowed_ids = '^(DT_\d{2}_\d{7}|DTE_\d{4}|SYNTH_.*)$'

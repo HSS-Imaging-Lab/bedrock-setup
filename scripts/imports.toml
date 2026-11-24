@@ -1,0 +1,7 @@
+# Counts only go down. After a cleanup, `python3 scripts/check_imports.py --update` lowers them.
+# Raising one is a hand edit, reviewed in the pull request.
+exclude = []
+
+[aliases]
+
+[deep_imports]

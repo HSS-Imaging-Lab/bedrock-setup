@@ -11,3 +11,14 @@ config.toml
 
 __pycache__/
 *.py[cod]
+
+# Python tooling
+.venv/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+dist/
+.repos/

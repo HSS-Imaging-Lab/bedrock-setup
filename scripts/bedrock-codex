@@ -94,8 +94,8 @@ detect_platform() {
 # ── Model resolution ──────────────────────────────────────────
 resolve_model() {
     case "${1:-}" in
-        astra|6) MODEL="global.openai.gpt-6-astra" ;;
-        sol)      MODEL="global.openai.gpt-6-sol" ;;
+        astra|6) MODEL="global.openai.gpt-6.2-astra" ;;
+        sol)      MODEL="global.openai.gpt-6.2-sol" ;;
         luna)     MODEL="global.openai.gpt-6-luna" ;;
         "")       pick_model; return ;;
         *)        echo "Unknown model: $1"
@@ -108,9 +108,9 @@ resolve_model() {
 
 pick_model() {
     local MODELS=(
-        "global.openai.gpt-6-astra"
+        "global.openai.gpt-6.2-astra"
         "global.openai.gpt-6-luna"
-        "global.openai.gpt-6-sol"
+        "global.openai.gpt-6.2-sol"
     )
     echo ""
     echo "Select a model:"
